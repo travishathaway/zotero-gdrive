@@ -14,3 +14,9 @@ tsconfig.tsbuildinfo
 .scaffold
 build
 logs
+
+# OAuth Credentials (sensitive - do not commit!)
+src/config/credentials.ts
+
+# Claude files
+.claude/

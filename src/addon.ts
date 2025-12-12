@@ -20,6 +20,10 @@ class Addon {
       rows: Array<{ [dataKey: string]: string }>;
     };
     dialog?: DialogHelper;
+    // Plugin modules
+    oauthManager?: any; // GoogleOAuthManager
+    syncStateDB?: any; // SyncStateDB
+    syncCoordinator?: any; // SyncCoordinator
   };
   // Lifecycle hooks
   public hooks: typeof hooks;

@@ -1,5 +1,4 @@
 import { config } from "../../package.json";
-import { getString } from "../utils/locale";
 
 export async function registerPrefsScripts(_window: Window) {
   // This function is called when the prefs window is opened
@@ -7,32 +6,8 @@ export async function registerPrefsScripts(_window: Window) {
   if (!addon.data.prefs) {
     addon.data.prefs = {
       window: _window,
-      columns: [
-        {
-          dataKey: "title",
-          label: getString("prefs-table-title"),
-          fixedWidth: true,
-          width: 100,
-        },
-        {
-          dataKey: "detail",
-          label: getString("prefs-table-detail"),
-        },
-      ],
-      rows: [
-        {
-          title: "Orange",
-          detail: "It's juicy",
-        },
-        {
-          title: "Banana",
-          detail: "It's sweet",
-        },
-        {
-          title: "Apple",
-          detail: "I mean the fruit APPLE",
-        },
-      ],
+      columns: [],
+      rows: [],
     };
   } else {
     addon.data.prefs.window = _window;
@@ -42,90 +17,189 @@ export async function registerPrefsScripts(_window: Window) {
 }
 
 async function updatePrefsUI() {
-  // You can initialize some UI elements on prefs window
-  // with addon.data.prefs.window.document
-  // Or bind some events to the elements
-  const renderLock = ztoolkit.getGlobal("Zotero").Promise.defer();
   if (addon.data.prefs?.window == undefined) return;
-  const tableHelper = new ztoolkit.VirtualizedTable(addon.data.prefs?.window)
-    .setContainerId(`${config.addonRef}-table-container`)
-    .setProp({
-      id: `${config.addonRef}-prefs-table`,
-      // Do not use setLocale, as it modifies the Zotero.Intl.strings
-      // Set locales directly to columns
-      columns: addon.data.prefs?.columns,
-      showHeader: true,
-      multiSelect: true,
-      staticColumns: true,
-      disableFontSizeScaling: true,
-    })
-    .setProp("getRowCount", () => addon.data.prefs?.rows.length || 0)
-    .setProp(
-      "getRowData",
-      (index) =>
-        addon.data.prefs?.rows[index] || {
-          title: "no data",
-          detail: "no data",
-        },
-    )
-    // Show a progress window when selection changes
-    .setProp("onSelectionChange", (selection) => {
-      new ztoolkit.ProgressWindow(config.addonName)
-        .createLine({
-          text: `Selected line: ${addon.data.prefs?.rows
-            .filter((v, i) => selection.isSelected(i))
-            .map((row) => row.title)
-            .join(",")}`,
-          progress: 100,
-        })
-        .show();
-    })
-    // When pressing delete, delete selected line and refresh table.
-    // Returning false to prevent default event.
-    .setProp("onKeyDown", (event: KeyboardEvent) => {
-      if (event.key == "Delete" || (Zotero.isMac && event.key == "Backspace")) {
-        addon.data.prefs!.rows =
-          addon.data.prefs?.rows.filter(
-            (v, i) => !tableHelper.treeInstance.selection.isSelected(i),
-          ) || [];
-        tableHelper.render();
-        return false;
+
+  const doc = addon.data.prefs.window.document;
+
+  // Update authentication status
+  try {
+    const isAuthenticated = await addon.data.oauthManager?.isAuthenticated();
+    const authStatusEl = doc.getElementById(`${config.addonRef}-auth-status`);
+    const authButtonEl = doc.getElementById(
+      `${config.addonRef}-auth-button`,
+    ) as HTMLButtonElement;
+
+    if (isAuthenticated) {
+      if (authStatusEl) authStatusEl.textContent = "✓ Authenticated";
+      if (authButtonEl) {
+        authButtonEl.setAttribute("data-l10n-id", "pref-auth-button-signout");
+        authButtonEl.textContent = "Sign Out";
       }
-      return true;
-    })
-    // For find-as-you-type
-    .setProp(
-      "getRowString",
-      (index) => addon.data.prefs?.rows[index].title || "",
-    )
-    // Render the table.
-    .render(-1, () => {
-      renderLock.resolve();
-    });
-  await renderLock.promise;
-  ztoolkit.log("Preference table rendered!");
+    } else {
+      if (authStatusEl) authStatusEl.textContent = "✗ Not authenticated";
+      if (authButtonEl) {
+        authButtonEl.setAttribute("data-l10n-id", "pref-auth-button-signin");
+        authButtonEl.textContent = "Sign in to Google Drive";
+      }
+    }
+  } catch (error) {
+    ztoolkit.log("Error checking auth status:", error);
+  }
+
+  // Update sync statistics
+  try {
+    const stats = await addon.data.syncCoordinator?.getStats();
+    if (stats) {
+      const totalEl = doc.getElementById(
+        `${config.addonRef}-total-attachments`,
+      );
+      const syncedEl = doc.getElementById(
+        `${config.addonRef}-synced-attachments`,
+      );
+      const unsyncedEl = doc.getElementById(
+        `${config.addonRef}-unsynced-attachments`,
+      );
+
+      if (totalEl) totalEl.textContent = stats.totalAttachments.toString();
+      if (syncedEl) syncedEl.textContent = stats.syncedAttachments.toString();
+      if (unsyncedEl)
+        unsyncedEl.textContent = stats.unsyncedAttachments.toString();
+    }
+  } catch (error) {
+    ztoolkit.log("Error getting sync stats:", error);
+  }
+
+  ztoolkit.log("Preference UI updated!");
 }
 
 function bindPrefEvents() {
-  addon.data
-    .prefs!.window.document?.querySelector(
-      `#zotero-prefpane-${config.addonRef}-enable`,
-    )
-    ?.addEventListener("command", (e: Event) => {
-      ztoolkit.log(e);
-      addon.data.prefs!.window.alert(
-        `Successfully changed to ${(e.target as XUL.Checkbox).checked}!`,
-      );
+  const doc = addon.data.prefs!.window.document;
+
+  // Authentication button
+  doc
+    .getElementById(`${config.addonRef}-auth-button`)
+    ?.addEventListener("click", async () => {
+      try {
+        const isAuthenticated =
+          await addon.data.oauthManager?.isAuthenticated();
+
+        if (isAuthenticated) {
+          // Sign out
+          const confirmed = Services.prompt.confirm(
+            addon.data.prefs!.window as any,
+            "Sign Out",
+            "Are you sure you want to sign out from Google Drive?",
+          );
+
+          if (confirmed) {
+            addon.data.oauthManager?.clearTokens();
+            addon.data.prefs!.window.alert(
+              "Successfully signed out from Google Drive.",
+            );
+            updatePrefsUI();
+          }
+        } else {
+          // Sign in
+          addon.data.prefs!.window.alert(
+            "Your browser will open for authentication. Please authorize the plugin to access Google Drive.",
+          );
+
+          try {
+            await addon.data.oauthManager?.authenticate();
+            addon.data.prefs!.window.alert(
+              "Successfully authenticated with Google Drive!",
+            );
+            updatePrefsUI();
+          } catch (error: any) {
+            addon.data.prefs!.window.alert(
+              `Authentication failed: ${error.message}`,
+            );
+          }
+        }
+      } catch (error: any) {
+        ztoolkit.log("Auth button error:", error);
+        addon.data.prefs!.window.alert(`Error: ${error.message}`);
+      }
     });
 
-  addon.data
-    .prefs!.window.document?.querySelector(
-      `#zotero-prefpane-${config.addonRef}-input`,
-    )
-    ?.addEventListener("change", (e: Event) => {
-      ztoolkit.log(e);
-      addon.data.prefs!.window.alert(
-        `Successfully changed to ${(e.target as HTMLInputElement).value}!`,
+  // Sync Now button
+  doc
+    .getElementById(`${config.addonRef}-sync-now`)
+    ?.addEventListener("click", async () => {
+      try {
+        const isAuthenticated =
+          await addon.data.oauthManager?.isAuthenticated();
+
+        if (!isAuthenticated) {
+          addon.data.prefs!.window.alert(
+            "Please authenticate first by clicking the 'Sign in to Google Drive' button above.",
+          );
+          return;
+        }
+
+        // Close preferences window
+        addon.data.prefs!.window.close();
+
+        // Trigger sync in main window
+        try {
+          const syncResult = await addon.data.syncCoordinator?.syncAll();
+
+          let message = `Sync Results:\n\n`;
+          message += `Total to sync: ${syncResult.total}\n`;
+          message += `Successful: ${syncResult.successful}\n`;
+          message += `Failed: ${syncResult.failed}\n`;
+          message += `Already synced (skipped): ${syncResult.skipped}\n`;
+
+          if (syncResult.errors && syncResult.errors.length > 0) {
+            message += `\nErrors:\n`;
+            syncResult.errors.slice(0, 5).forEach((error: string) => {
+              message += `- ${error}\n`;
+            });
+            if (syncResult.errors.length > 5) {
+              message += `... and ${syncResult.errors.length - 5} more errors\n`;
+            }
+          }
+
+          const mainWindow = Zotero.getMainWindow();
+          if (mainWindow) {
+            Services.prompt.alert(mainWindow as any, "Sync Complete", message);
+          }
+        } catch (error: any) {
+          const mainWindow = Zotero.getMainWindow();
+          if (mainWindow) {
+            Services.prompt.alert(
+              mainWindow as any,
+              "Sync Failed",
+              `Sync failed: ${error.message}`,
+            );
+          }
+        }
+      } catch (error: any) {
+        ztoolkit.log("Sync button error:", error);
+        addon.data.prefs!.window.alert(`Error: ${error.message}`);
+      }
+    });
+
+  // Clear sync history button
+  doc
+    .getElementById(`${config.addonRef}-clear-sync`)
+    ?.addEventListener("click", async () => {
+      const confirmed = Services.prompt.confirm(
+        addon.data.prefs!.window as any,
+        "Clear Sync History",
+        "This will clear all sync records. Files on Google Drive will not be deleted, but all attachments will be re-uploaded on next sync. Continue?",
       );
+
+      if (confirmed) {
+        try {
+          await addon.data.syncStateDB?.clearAll();
+          addon.data.prefs!.window.alert("Sync history cleared successfully!");
+          updatePrefsUI();
+        } catch (error: any) {
+          addon.data.prefs!.window.alert(
+            `Failed to clear sync history: ${error.message}`,
+          );
+        }
+      }
     });
 }
